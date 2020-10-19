@@ -1,0 +1,11 @@
+#!/bin/bash
+# vim:set ft=bash
+set -eu -o pipefail
+
+TEMPLATE="${1?Usage: $BASH_SOURCE cfn-template}"
+SCRIPT_DIR="$(cd "${BASH_SOURCE%/*}" && pwd -P)"
+PROJECT_DIR="$SCRIPT_DIR/.."
+
+[ -x "$SCRIPT_DIR/check-aws-auth" ] && "$SCRIPT_DIR/check-aws-auth"
+
+aws cloudformation validate-template --template-body "file://$PROJECT_DIR/$TEMPLATE" >/dev/null

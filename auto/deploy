@@ -1,0 +1,105 @@
+#!/bin/bash
+# vim:set ft=bash
+set -eu -o pipefail
+
+SCRIPT_DIR="$(cd "${BASH_SOURCE%/*}" && pwd -P)"
+STACK_NAME="${1:-}"
+PROJECT_DIR="$SCRIPT_DIR/.."
+S3_BUCKET="${S3_BUCKET:-}"
+AWS="${AWS:-aws}"
+export AWS
+
+# The name of the stack is always required
+if [ -z "$STACK_NAME" ]; then
+	# shellcheck disable=SC2128
+	# Rationale: this is the expected behaviour, we need just the first element
+	echo "ERROR: Usage: ${BASH_SOURCE} <stack name>"
+	exit 1
+fi
+
+# shellcheck source=check-aws-auth
+[ -x "$SCRIPT_DIR/check-aws-auth" ] && "$SCRIPT_DIR/check-aws-auth"
+
+printf 'Checking AWS for existing stack "%s" ... ' "$STACK_NAME"
+# XXX: AWS CLI is so bad with return codes: every error is code 255.
+#      We are not here to fix AWS CLI, so we are going to workaround the
+#      issue, even though it conceals a possible issue during the call
+#      to "cloudformation describe-stacks".
+#                                                                -- (GM)
+# shellcheck disable=SC2016
+# Rationale: the query part does not need to be expanded
+ OUTPUT=$($AWS cloudformation describe-stacks \
+	--stack-name "$STACK_NAME" \
+	--query 'Stacks[0].[StackStatus,Outputs[?OutputKey==`ArtifactStore`].OutputValue]' \
+	--output text 2>/dev/null ||:)
+if [ -n "$OUTPUT" ]; then
+	# Variable expansion magic :)
+	STACK_STATE="${OUTPUT%%$'\n'*}"	# Extract the first line from the OUTPUT variable
+	OUTPUT="${OUTPUT#*$'\n'}"	# Delete the first line in the OUTPUT variable
+	[ -z "${STACK_STATE//[[:upper:]_]}" ] && echo 'found' || echo 'found (with issues)'
+	case "$STACK_STATE" in
+		*_COMPLETE)
+			case "$STACK_STATE" in
+				DELETE_*)
+					printf 'WARNING: Stack "%s" has been deleted, considering this to be a fresh deployment\n' "$STACK_NAME"
+					;;
+				*)
+					export _AUTO_DEPLOY_INITIAL=
+					S3_BUCKET="$OUTPUT"
+					[ -n "$S3_BUCKET" ] && printf '\\ Using the s3://%s S3 bucket for CloudFormation artifacts\n' "$S3_BUCKET"
+					;;
+			esac
+			;;
+		*)
+			printf 'ERROR: Stack "%s" is in a bad state (%s), aborting' "$STACK_NAME" "${OUTPUT%%$'\n'*}"
+			exit 1
+			;;
+	esac
+else
+	echo 'NOT found'
+fi
+
+if [ -z "$S3_BUCKET" ]; then
+	if [ -n "${_AUTO_DEPLOY_INITIAL:-}" ]; then
+		echo 'ERROR: A logical loop detected, bailing out!'
+		exit 1
+	fi
+	export _AUTO_DEPLOY_INITIAL=1
+	echo 'Using a temporary S3 bucket for the initial deployment'
+	if ! S3_BUCKET="$(mktemp -u -p. lambda-bootstrap-XXXXXXXXXX | cut -f2- -d/ | tr '[:upper:]' '[:lower:]')"; then
+		echo 'ERROR: Could not generate a temporary name for the S3 bucket'
+		exit 1
+	fi
+	trap 'RC=$?; trap - EXIT; '"$AWS"' s3 rb --force "s3://'"$S3_BUCKET"'"; exit $RC' EXIT HUP INT QUIT SEGV TERM
+	if ! $AWS s3 mb "s3://${S3_BUCKET}"; then
+		printf 'ERROR: Failed to create temporary S3 bucket "s3://%s", cannot continue' "$S3_BUCKET"
+		trap - EXIT
+		exit 1
+	fi
+fi
+
+# shellcheck source=package-lambda
+[ -f "$PROJECT_DIR/lambda.zip" ] || "$SCRIPT_DIR/package-lambda" "${VENV_PYTHON:-}"
+
+echo Resolving the CloudFormation template ...
+$AWS cloudformation package \
+	--template-file "$PROJECT_DIR/lambda.template" \
+	--output-template-file "$PROJECT_DIR/lambda.template.packaged" \
+	--s3-bucket "${S3_BUCKET}" --s3-prefix 'cloudformation'
+echo Deploying the stack using CloudFormation ...
+$AWS cloudformation deploy \
+	--template-file "$PROJECT_DIR/lambda.template.packaged" \
+	--stack-name "${STACK_NAME}" \
+	--capabilities CAPABILITY_IAM \
+	--no-fail-on-empty-changeset
+
+if [ -n "${_AUTO_DEPLOY_INITIAL:-}" ]; then
+	echo 'Re-deploying the stack to use the S3 bucket from the stack for CloudFormation artifacts ...'
+	# shellcheck disable=SC2128
+	"${BASH_SOURCE}" "$@"
+	exit $?
+fi
+
+# The following is to make "make" happy :)
+# shellcheck disable=SC2128
+touch "$BASH_SOURCE"

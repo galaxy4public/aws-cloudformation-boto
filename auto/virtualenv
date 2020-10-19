@@ -1,0 +1,26 @@
+#!/bin/bash
+# vim:set ft=bash
+set -eu -o pipefail
+
+SCRIPT_DIR="$(cd "${BASH_SOURCE%/*}" && pwd -P)"
+PROJECT_DIR="$SCRIPT_DIR/.."
+VENV_PYTHON="${1:-python3}"
+
+if [ ! -f "$PROJECT_DIR/.build/bin/activate" ]; then
+	echo Preparing a virtual environment for Python ...
+	virtualenv -p "${VENV_PYTHON}" "$PROJECT_DIR/.build"
+fi
+
+echo Installing Lambda dependencies ...
+# We do not control the quality of 3rd party code ...
+set +u
+# shellcheck disable=SC1090
+# Rationale: most of the time when shellcheck is ran there will be no "activate"
+. "$PROJECT_DIR/.build/bin/activate"
+# ... but we are maintaining ours :)
+set -u
+pip install -r "$PROJECT_DIR/requirements.txt"
+
+# The following is to make "make" happy :)
+# shellcheck disable=SC2128
+touch "${BASH_SOURCE}"

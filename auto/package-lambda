@@ -1,0 +1,31 @@
+#!/bin/bash
+# vim:set ft=bash
+set -eu -o pipefail
+
+SCRIPT_DIR="$(cd "${BASH_SOURCE%/*}" && pwd -P)"
+VENV_PYTHON="${1:-python3}"
+PROJECT_DIR="$SCRIPT_DIR/.."
+LIB_DIR="$PROJECT_DIR/lib"
+SRC_DIR="$PROJECT_DIR/src"
+
+# shellcheck source=prepare-deps
+[ -d "$PROJECT_DIR/lib" ] || "$SCRIPT_DIR/prepare-deps" "$VENV_PYTHON"
+
+echo Creating the package ...
+# checking that $LIB_DIR is not empty
+OUTPUT="$(find $LIB_DIR -xdev -mindepth 1 -prune -print -quit)"
+if [ -n "$OUTPUT" ]; then
+	pushd "$LIB_DIR" >/dev/null
+	zip -9qr "$PROJECT_DIR/lambda.zip" .
+	popd >/dev/null
+
+	echo Mixing in the Lambda code and supporting shell scripts...
+fi
+chmod 0644 "$SRC_DIR/"*.py
+pushd "$SRC_DIR" >/dev/null
+zip -9q "$PROJECT_DIR/lambda.zip" -- *.py
+popd >/dev/null
+
+# The following is to make "make" happy :)
+# shellcheck disable=SC2128
+touch "${BASH_SOURCE}"

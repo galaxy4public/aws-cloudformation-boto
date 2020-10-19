@@ -1,0 +1,19 @@
+#!/bin/bash
+# vim:set ft=bash
+set -eu -o pipefail
+
+if [ -z "${SKIP_AUTH_CHECK:-}" ]; then
+	EXPIRE_SECONDS=0
+	if [ -n "${AWS_EXPIRE:-}" ]; then
+		EXPIRE_SECONDS="$AWS_EXPIRE"
+	elif [ -n "${AWS_SESSION_EXPIRES_UNIX_TIME:-}" ]; then
+		EXPIRE_SECONDS="$AWS_SESSION_EXPIRES_UNIX_TIME"
+	else
+		echo 'ERROR: Looks like you are not authenticated to AWS, please ensure that you are!' >&2
+		exit 1
+	fi
+	if (( $(date +%s) > ($EXPIRE_SECONDS - 5*60) )); then
+		echo 'ERROR: Your AWS session has expired (or just about to expire)! Please re-authenticate before trying again.' >&2
+		exit 1
+	fi
+fi

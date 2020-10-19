@@ -1,1 +1,2 @@
-# aws-cloudformation-boto
+# Boto3 Template Transform for AWS CloudFormation
+

@@ -1,0 +1,26 @@
+Transform: [ Boto3 ]
+Description: Test Boto
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+
+  File1:
+    Type: AWS::Boto
+    Actions:
+      Create:
+        - Action: S3.put_object
+          Parameters:
+            Bucket: !Ref Bucket
+            Key: "File1"
+            Body: "Content"
+        - Action: S3.put_object
+          Parameters:
+            Bucket: !Ref Bucket
+            Key: "File1"
+            Body: "Content Replaced"
+      Delete:
+        Action: S3.delete_object
+        Parameters:
+          Bucket: !Ref Bucket
+          Key: "File1"

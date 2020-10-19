@@ -1,0 +1,175 @@
+# vim:set ft=yaml ts=2 sts=2 sw=2 et:
+Transform: AWS::Serverless-2016-10-31
+Description: 'Transform: Boto3 -- Boto3 Interface for CloudFormation'
+
+Parameters:
+  MemorySize:
+    Description: Memory size to be allocated for the boto calls (MBs)
+    Type: Number
+    Default: 128
+    AllowedValues:
+      - 128
+      - 192
+      - 256
+      - 320
+      - 384
+      - 448
+      - 512
+      - 576
+      - 640
+      - 704
+      - 768
+      - 832
+      - 896
+      - 960
+      - 1024
+      - 1088
+      - 1152
+      - 1216
+      - 1280
+      - 1344
+      - 1408
+      - 1472
+      - 1536
+      - 1600
+      - 1664
+      - 1728
+      - 1792
+      - 1856
+      - 1920
+      - 1984
+      - 2048
+      - 2112
+      - 2176
+      - 2240
+      - 2304
+      - 2368
+      - 2432
+      - 2496
+      - 2560
+      - 2624
+      - 2688
+      - 2752
+      - 2816
+      - 2880
+      - 2944
+      - 3008
+    ConstraintDescription: must be between 128 and 3008 MBs in 64 increments
+  Timeout:
+    Description: Timeout for the boto calls (seconds)
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 300
+    ConstraintDescription: must be between 1 and 300 seconds
+  Bucket:
+    Description: An S3 Bucket with the Lambda code (if empty it will be created)
+    Type: String
+    Default: ''
+
+Conditions:
+  createBucket: !Equals [ '', !Ref Bucket ]
+
+Globals:
+  Function:
+    MemorySize: !Ref MemorySize
+    Timeout: !Ref Timeout
+    Runtime: python3.8
+
+Resources:
+  ArtifactStore:
+    Condition: createBucket
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      AccessControl: Private
+
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Effect: Allow
+      Path: /
+      Policies:
+        - PolicyName: !Sub '${AWS::StackName}-Policy'
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-Provider-*:log-stream:*
+                Effect: Allow
+
+  Permission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt Function.Arn
+      Principal: cloudformation.amazonaws.com
+#     XXX: This resource does not support Condition on resource policy,
+#     see https://github.com/aws-cloudformation/aws-cloudformation-coverage-roadmap/issues/636
+#     For now we manually add that restriction after the deployment.
+
+  ProviderLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties: 
+      LogGroupName: !Sub /aws/lambda/${Provider}
+      RetentionInDays: 7
+
+  Provider:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./lambda.zip
+      Handler: resource.handler
+      Policies: PowerUserAccess # XXX: Too relaxed, need to find a way how to restrict
+      #Role: !GetAtt Role.Arn
+
+
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./lambda.zip
+      Handler: macro.handler
+      Environment:
+        Variables:
+          LAMBDA_ARN: !GetAtt Provider.Arn
+      Role: !GetAtt Role.Arn
+
+  Alias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      Description: An alias for the macro function, so other accounts can use it in their templates
+      FunctionName: !Ref Function
+      FunctionVersion: $LATEST
+      Name: !Sub ${AWS::StackName}-macro
+
+  Macro:
+    Type: AWS::CloudFormation::Macro
+    Properties:
+      Name: Boto3
+      FunctionName: !GetAtt Function.Arn
+      LogGroupName: !Sub /aws/lambda/${Provider}
+      LogRoleARN: !GetAtt Role.Arn
+
+Outputs:
+  ArtifactStore:
+    Description: An S3 bucket where Lambda sources are stored
+    Value: !If
+      - createBucket
+      - !Ref ArtifactStore
+      - !Ref Bucket
+  Macro:
+    Description: The name of the macro
+    Value: !Ref Macro
+    Export:
+      Name: Boto3
